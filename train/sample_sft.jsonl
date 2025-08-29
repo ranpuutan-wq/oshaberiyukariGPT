@@ -1,0 +1,2 @@
+{"messages": [{"role": "user", "content": "Excelの列を自動で幅調整するVBA"}, {"role": "assistant", "content": "Columns.AutoFit の例..."}]}
+{"messages": [{"role": "user", "content": "Windowsサービスが停止する原因の切り分け"}, {"role": "assistant", "content": "イベントログの確認手順..."}]}

@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+pydantic
+requests
+PyYAML
+rank-bm25
+numpy
+transformers
+datasets
+trl
+peft
+bitsandbytes
+sentencepiece
+faiss-cpu
+rank-bm25

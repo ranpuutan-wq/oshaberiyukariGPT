@@ -1,0 +1,77 @@
+{
+  "topic": "今日のお昼なに食べる？",
+  "turns": [
+    {
+      "id": "334ffc06-9591-4e9d-9789-b8af4546dd24",
+      "speaker": "yukari",
+      "text": "あぁ、ラーメンはいい選択！でも私も好きなものがあるよ。",
+      "emotion": "smile"
+    },
+    {
+      "id": "64980d8c-0377-4719-808c-43ce7eb6a380",
+      "speaker": "maki",
+      "text": "えへ、そうなの？何が好きなの？",
+      "emotion": "joy"
+    },
+    {
+      "id": "4f49d473-061c-4f15-b497-b6c9c855f2ad",
+      "speaker": "ia",
+      "text": "私はサンドイッチが好き！新鮮な野菜とチーズのが最高ね。",
+      "emotion": "smile"
+    },
+    {
+      "id": "62edaf1e-2ecd-496b-959d-148c69a8f690",
+      "speaker": "one",
+      "text": "あはは、サンドイッチも良さげ！私も新鮮な野菜が大好き。",
+      "emotion": "joy"
+    },
+    {
+      "id": "0f666b6e-36a7-4129-9352-e09a1a657823",
+      "speaker": "yukari",
+      "text": "あぁ、新鮮な野菜は美味しいね！でもラーメンのスープが欲しくなるよ。",
+      "emotion": "smile"
+    },
+    {
+      "id": "35a6f23a-0e60-4428-b28a-7be6e7343e7c",
+      "speaker": "maki",
+      "text": "へぇ、スープも良さげ！私も好きなのはラーメンの具材ですね。",
+      "emotion": "joy"
+    },
+    {
+      "id": "b4b8c3c1-1737-4cc9-b5f5-ec1fce8b5636",
+      "speaker": "ia",
+      "text": "私は具材の種類が多いと嬢しいね！新鮮な野菜と具材の組み合わせが最高。",
+      "emotion": "smile"
+    },
+    {
+      "id": "04bc9637-475d-4b67-90c2-2186e92ce388",
+      "speaker": "one",
+      "text": "あはは、具材の種類が増えるほど楽しくなるね！",
+      "emotion": "joy"
+    },
+    {
+      "id": "2e86cc35-1e7b-4815-837b-7ab2e0dabbc7",
+      "speaker": "yukari",
+      "text": "えへ、楽しい話題ですね！でも時間が経つと食べ物の残りがあるよ。",
+      "emotion": "smile"
+    },
+    {
+      "id": "e27073b0-afb4-4596-a19a-d318788c3b53",
+      "speaker": "maki",
+      "text": "あはは、残りを友達に分けるのが一番ね！",
+      "emotion": "joy"
+    },
+    {
+      "id": "ac8f000d-5f89-434e-b666-9721ad03243b",
+      "speaker": "ia",
+      "text": "私は残りを保存しておく方がいいと思いますね！",
+      "emotion": "neutral"
+    },
+    {
+      "id": "e2ff3992-6857-4f94-bb39-8a16bd8c6531",
+      "speaker": "one",
+      "text": "えへ、保存する方がいいですね！私もそう思うよ。",
+      "emotion": "smile"
+    }
+  ]
+}

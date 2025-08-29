@@ -1,0 +1,25 @@
+# Python venv
+.venv*/
+venv/
+
+ Python build/cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# （必要なら）大きい生成物・モデル・音声
+*.wav
+*.mp3
+*.ogg
+*.pt
+*.bin
+*.onnx

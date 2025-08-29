@@ -1,0 +1,112 @@
+
+自分用メモです。
+雑多ですので参照しなくておk。見てもOK
+
+■開発環境準備
+venv 起動
+cd D:\Documents\★アプリ開発\推し会話\beatgpt
+.venv311\Scripts\activate
+
+サーバ起動・会話実行
+cd D:\Documents\★アプリ開発\推し会話\beatgpt
+.venv311\Scripts\activate
+./run_all.bat 8787
+
+※ポート使用中ならポート変える
+
+
+
+お試し音声tts確認
+Invoke-RestMethod -Uri "http://127.0.0.1:8787/tts/speak"`
+  -Method Post -ContentType "application/json" `
+  -Body '{"text":"やっほー、ゆかりテストですよ","speaker":"maki","speed":1.02}' `
+  -OutFile "yukari_test.wav"
+Start-Process "yukari_test.wav"
+
+■サーバだけ起動
+python -m uvicorn app.server_all:app --host 127.0.0.1 --port 8787
+
+http://127.0.0.1:8787/docs
+
+■実行環境準備
+・python　8020
+・python  8787
+・assist seika起動
+・Voiceroid2 起動
+・CeVIOCS起動　※
+・Assistseika製品スキャン
+・AssistseikaHTTP再起動
+・TalkRunner実行
+python app\talk_runner.py
+
+■pip
+pip install comtypes pywin32
+pip install comtypes
+pip install clr
+
+■CeVIO CS　API仕様
+https://cevio.jp/guide/cevio_cs7/interface/com/
+
+
+
+
+
+
+ノーマライズ
+New-Item -ItemType Directory -Force -Name normalized
+Get-ChildItem *.wav | ForEach-Object {
+    $out = "normalized\$($_.Name)"
+    ffmpeg -i $_.FullName -af "loudnorm=I=-23:TP=-2:LRA=11" $out
+}
+
+★マキさん追加 normalized 配下で
+New-Item -ItemType Directory -Force -Path "normalized\processed\maki" | Out-Null
+Get-ChildItem ".\normalized\maki_*.wav" | ForEach-Object {
+  $out = "normalized\processed\maki\$($_.BaseName)_proc.wav"
+  ffmpeg -y -i $_.FullName -vn `
+    -af "silenceremove=start_periods=1:start_silence=0.2:start_threshold=-50dB:stop_periods=1:stop_silence=0.3:stop_threshold=-50dB,afftdn=nf=-25,highpass=f=80,deesser=i=0.35:f=0.46:m=0.6,lowpass=f=12000,alimiter=limit=0.98,loudnorm=I=-23:TP=-2:LRA=11" `
+    -ac 1 -ar 24000 -c:a pcm_s16le $out
+}
+
+
+
+
+Torch の入れ方（Windows例）
+
+CPUだけで良ければ：pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+NVIDIA CUDA 12.4 なら：pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+Torch はバイナリが重く、CUDA版は環境差が激しいので requirements からは外すのが吉。プロビジョニング手順に分離するのが安定。
+
+
+--------- git
+# 作業開始
+git pull
+
+# 作業 → 変更確認
+git status
+git add <変更したファイル>  # まとめてなら git add .
+git commit -m "feat: ○○を追加"
+
+# 共有（バックアップ）
+git push
+git tag -a backup-2025-08-29 -m "checkpoint"
+git push --tags
+---------------
+
+
+-----------
+コンテキストおもくなったから明日は別のチャットにひきつぎたい。
+このチャットの開始時に渡したコンテキストに、このチャットで追加した機能、短期課題、長期課題を
+もとのコンテキストにマージして、80％くらいに記載集約してまとめて
+
+-----------------
+これはアプリ開発のためのチャットです
+添付のコンテキスト、ソースを参照して開発の状況を理解してください。
+必要であればプロジェクト内の別チャットを参照してください。
+理解できたら、開発作業に入ります。
+このチャットの開発目標は、「会話生成と再生の並列化」です。
+
+ソースコード提示時は、現在のソース
+-----------------
