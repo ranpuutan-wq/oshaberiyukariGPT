@@ -94,6 +94,86 @@ git push
 git tag -a backup-2025-08-29 -m "checkpoint"
 git push --tags
 ---------------
+大きいファイルはLFS
+音声やモデル（.wav/.mp3/.pt/.onnx）を置くなら Git LFS を有効化しておくのが吉だッピ
+git lfs install
+git lfs track "*.wav" "*.mp3" "*.ogg" "*.pt" "*.bin" "*.onnx"
+git add .gitattributes
+git commit -m "chore: enable Git LFS"
+git push
+
+------------
+① いまの変更をコミットする（基本～応用）
+git status                          # 変更の確認
+git add <ファイル名>               # 個別にステージ
+git add .                           # まとめてステージ（大胆）
+git diff --cached                   # コミット前に差分確認
+git commit -m "feat: ○○を追加"     # コミット
+git push                            # 共有（main追跡済みならこれだけ）
+
+よく使う応用
+git commit --amend                  # 直前のコミットメッセージ/内容を上書き
+git restore --staged <ファイル>     # ステージから外す
+git restore <ファイル>              # 作業ツリーの変更を破棄（未ステージ）
+
+② ロールバックする（安全順）
+壊す前にタグや退避ブランチを切ると安心だッピ
+
+git tag -a backup-$(Get-Date -Format yyyyMMdd-HHmm) -m "checkpoint"   # 退避タグ
+git checkout -b rescue/$(Get-Date -Format yyyyMMdd-HHmm)              # 退避ブランチ
+
+A. ファイル単位で元に戻す
+git restore <ファイル>                                # 未ステージの変更を捨てる
+git restore --staged <ファイル>                       # ステージから外すだけ
+git restore --source=<コミットID> <ファイル/フォルダ>   # 過去版で上書き
+
+B. “あるコミットだけ打ち消す”（履歴を壊さない）
+git revert <コミットID>
+git push
+取り消し専用の新しいコミットが作られる＝安全だッピ
+
+---
+C. “履歴ごと戻す”（強い薬・要注意）
+git reset --soft  <コミットID>   # 履歴だけ戻す（変更はステージ済みで残る）
+git reset --mixed <コミットID>   # 履歴だけ戻す（変更は作業ツリーに残る）※既定
+git reset --hard  <コミットID>   # すべてその時点に戻す（変更消える）
+
+リモートも合わせるなら（本当に戻したい時だけ）
+git push --force-with-lease
+
+---
+D. “リモートの最新に合わせてローカルを全部捨てる”
+git fetch origin
+git reset --hard origin/main
+
+③ コミット履歴（リビジョン）を見る
+git log --oneline --graph --decorate --all     # 全体を木で俯瞰（定番）
+git log -- <パス>                               # そのファイルだけの履歴
+git show <コミットID>                           # そのコミットの詳細
+git diff <古いID> <新しいID>                    # 2点間の差分
+git blame <ファイル>                             # 各行がどのコミットか
+git reflog                                      # 直近のHEAD移動の履歴（迷子の救出）
+----------------
+git checkout -b feature/tts-improve   # 新しい枝を作って移動
+git switch main                       # main に戻る
+
+# まず元のブランチに戻る
+git switch main    # または git checkout main
+
+# その後、新しいブランチを削除
+git branch -d <ブランチ名>
+git branch -D <ブランチ名>
+
+#ブランチを作る
+git switch -c branch0829 
+修正
+git add .
+git commit -m "fix: branch0829での修正"
+git switch main
+git merge branch0829
+git branch -d branch0829
+git push   # ここでGitHubに反映
+
 
 
 -----------
@@ -103,10 +183,16 @@ git push --tags
 
 -----------------
 これはアプリ開発のためのチャットです
-添付のコンテキスト、ソースを参照して開発の状況を理解してください。
+添付のコンテキスト、gti上のソースを参照して開発の状況を理解してください。
+https://github.com/ranpuutan-wq/oshaberiyukariGPT
+
 必要であればプロジェクト内の別チャットを参照してください。
 理解できたら、開発作業に入ります。
 このチャットの開発目標は、「会話生成と再生の並列化」です。
 
-ソースコード提示時は、現在のソース
+ソースコード提示時は、現在のソースの変数名・関数名に整合したソースを生成
+既存の処理の統一した実装を行うこと。
+上記は厳守してください。(不要なデグレードになり、バグ修正で時間がかかるため)
+
+
 -----------------
