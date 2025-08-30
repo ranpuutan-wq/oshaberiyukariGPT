@@ -11,13 +11,28 @@ import threading
 import queue
 import asyncio
 import concurrent.futures
+import json 
 
 # third-party
 import requests
 import simpleaudio as sa
 import numpy as np
 from openai import OpenAI
-from seika_http_client import SeikaClient
+from app.seika_http_client import SeikaClient
+
+DEBUG = bool(int(os.getenv("DEBUG", "1")))  # 1で詳しいログを出す
+
+# Runtime diagnostics (helpful when import issues occur at runtime)
+try:
+    import sys, pkgutil
+    print(f"[diag] sys.executable={sys.executable}")
+    try:
+        import openai as _openai_pkg
+        print(f"[diag] openai package: {getattr(_openai_pkg, '__file__', '(no file)')} version={getattr(_openai_pkg,'__version__','(no version)')}")
+    except Exception as _e:
+        print(f"[diag] openai import at runtime failed: {_e}")
+except Exception:
+    pass
 
 # typing / helpers
 from dataclasses import dataclass, field
@@ -25,11 +40,18 @@ from difflib import SequenceMatcher
 from typing import Optional, List, Dict, Any
 
 import queue, threading, time
+from app.pipeline_parallel import TTSPipeline, SpeechItem
+from typing import List, Dict, Any, Optional
+
 
 GEN_URL = os.getenv("GEN_URL", "http://127.0.0.1:8787/gen/generate_4")
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8787/tts/speak")
+PAR_URL = os.getenv("PAR_URL", "http://127.0.0.1:8787/gen/paratalk") #並列会話
 
 #QUEUES = {spk: AudioQueue() for spk in ["yukari","maki","ia","one"]}
+
+PROPOSE_URL = os.getenv("PROPOSE_URL", "http://127.0.0.1:8787/gen/propose")  # 一言生成API
+PROPOSE_STEPS = os.getenv("PROPOSE_STEPS")  # 例: "10" をセットすると propose ループ起動
 
 # 一人称・呼び名（あなたの定義に合わせて）
 SELF_PRON = {"yukari": "私", "maki": "私", "ia": "IA", "one": "私"}
@@ -108,15 +130,11 @@ TOPIC_POOL = [
     "AIの使いどころ",
     "お金の管理アプリ",
     "集中切れたときの戻し方",
-]
+    # その他
+    "暇だねー",
+    "ここのラーメン辛くない？"
 
-#キュー関連
-#20250829 1032追加開始
-def enqueue_play(speaker: str, wav_bytes: bytes, delay_ms=0, gain_db=0, allow_overlap=False, meta=None):
-    # 既存の AudioQueue をそのまま使う（ワーカースレッドは各話者ごとに1本）
-    # allow_overlap は将来使うためのダミー引数として保持（仕様互換のため未使用でもOK）
-    enqueue_audio(speaker, wav_bytes, delay_ms=delay_ms, gain_db=gain_db)
-#20250829 1032追加終了
+]
 
 class AudioQueue:
     def __init__(self):
@@ -427,7 +445,7 @@ def enforce_consistency(state: ConvState, speaker: str, text: str) -> str:
     return t
 
 def pick_topic() -> str:
-    return random.choice(TOPIC_POOL)
+    return "「" + random.choice(TOPIC_POOL) + "」という雑談を自分の発言として切り出す"
 
 # 直近と同じ語尾の連続を避ける
 def _diversify_ending(text: str, last_text: str | None) -> str:
@@ -772,12 +790,118 @@ def run_conversation(topic=None, turns=12):
     wait_all_playback(max_wait_sec=total_sec * 1.1 + 1.0)  # ★ 追加
 
 
+async def run_dialogue(dialogue, tts_manager, scheduler, allow_overlap=False):
+    # 1) TTS用コールバック（既存の統一入口をそのまま利用）
+    async def _tts(speaker: str, text: str, emotion):
+        return await tts_manager.synth_for_async(speaker, text, emotion=emotion)
+
+    # 2) パイプライン入力
+    items = [SpeechItem(idx=i, speaker=d["speaker"], text=d["text"], emotion=d.get("emotion"))
+             for i, d in enumerate(dialogue)]
+
+    # 3) 並列TTS（話者間は並列・同一話者は直列）
+    pipeline = TTSPipeline(tts_func=_tts, max_parallel_tts=3, per_speaker_serial=True)
+    done_list = await pipeline.run_collect(items)
+
+    # 4) スケジューリング（順序は“会話順”で、短文は軽く被せ）
+    clips = [Clip(idx=d.idx, speaker=d.speaker, wav=d.wav,
+                  can_overlap=(allow_overlap and d.can_overlap), gain_db=d.gain_db)
+             for d in done_list]
+
+    total_sec = scheduler.schedule_and_enqueue(clips)  # 既存ロジックを活用
+    wait_all_playback(max_wait_sec=total_sec * 1.1 + 1.0)
+
+def _propose_once(topic: str, history: list[dict], prior_feelings: dict|None = None) -> dict:
+    """
+    /gen/propose を1回叩いて {speaker, line, line_ruby, emotion, feelings} を返す
+    """
+    payload = {
+        "topic": topic,
+        "history": history,
+        "speakers": ["yukari","maki","ia","one"],
+        "prior_feelings": prior_feelings or {},
+    }
+    r = requests.post(PROPOSE_URL, json=payload, timeout=60)
+    r.raise_for_status()
+    return r.json()  # {"speaker","line","line_ruby","emotion","feelings"}
+
+# ===== 追加：逐次会話ループ（提案→即TTS→history更新 を繰り返す） =====
+def run_propose_loop(topic: str, steps: int = 10, allow_overlap: bool = True):
+    """
+    1ターン毎に /gen/propose → /tts/speak を回す。
+    - steps 回繰り返し
+    - history は[{speaker,text}]の配列として更新
+    - emotion は /tts/speak の emotion に渡す
+    """
+    history: list[dict] = []
+    prior_feelings: dict|None = None
+
+    print(f"[loop] propose topic='{topic}' steps={steps} url={PROPOSE_URL}")
+    for i in range(steps):
+        # 1) 一言生成
+        obj = _propose_once(topic, history, prior_feelings)
+        if DEBUG:
+            try:
+                print("[DEBUG][propose][json]", json.dumps(obj, ensure_ascii=False))
+            except Exception as _e:
+                print("[DEBUG][propose][json] dump error:", _e, obj)
+        
+        spk = obj.get("speaker", "yukari")
+        text = obj.get("line") or obj.get("line_ruby") or ""
+        emo = obj.get("emotion") or "neutral"
+        prior_feelings = obj.get("feelings") or prior_feelings
+
+       # ★ 新: topicが返ってきていて、かつ変わっていたら塗り替える
+        new_topic = obj.get("topic")
+        if new_topic and isinstance(new_topic, str) and new_topic.strip() and new_topic != topic:
+            if DEBUG:
+                print(f"[DEBUG][topic] overwrite: '{topic}' -> '{new_topic}'")
+            topic = new_topic
+
+        print(f"[loop:{i+1}/{steps}] {spk}: {text}  (emotion={emo})")
+
+        # 2) 即TTS（サーバ側 /tts/speak の既存I/F使用）
+        #    SpeakReq: {speaker,text,style?,speed,pitch,emotion} に準拠
+        #    ここは既存の /tts/speak 実装と整合（サーバ側参照）  
+        #    -> TTS_URL は既存定義を流用
+        try:
+            rr = requests.post(
+                TTS_URL,
+                json={"speaker": spk, "text": text, "emotion": emo},
+                timeout=int(os.getenv("TTS_TIMEOUT_SEC","60"))
+            )
+            if rr.status_code == 200:
+                # 音声はサーバ側で再生している構成のため、client側では保存せずログのみ
+                pass
+            else:
+                print("[loop][tts][warn]", rr.status_code, rr.text[:200])
+        except Exception as e:
+            print("[loop][tts][err]", e)
+
+        # 3) 履歴更新（次ターンの文脈）
+        history.append({"speaker": spk, "text": text})
+
+
 def main():
-    topic = None
+    topic = pick_topic()
     turns = 12
     print(f"[runner] start topic={topic} turns={turns}")
     try:
-        run_conversation(topic=topic, turns=turns)
+        #(1)直列会話
+        #run_conversation(topic=topic, turns=turns)
+
+        #(2)並列会話
+        """
+        r = requests.post(PAR_URL, json={"topic": topic, "turns": turns, "allow_overlap": True }, timeout=60)
+        if r.status_code != 200:
+            print("[debug] main HTTP", r.status_code)
+            print("[debug] main body[:500] =", r.text[:500])
+            return
+        """
+        #(3)一言会話繰り返し(お試し)
+        run_propose_loop(topic, steps=turns, allow_overlap=True)
+
+
         print("[runner] done.")
     except Exception:
         import traceback

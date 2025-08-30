@@ -9,16 +9,20 @@ from pydantic import BaseModel
 
 # 生成まわり
 from app.llm_openai import generate_turns
+from app.llm_openai import build_propose_messages, propose_one_line  # 追加
 # TTSまわり
 from app.tts.manager import TTSManager
 # CeVIO列挙（任意）
 from app.tts.cevio_com_dyn import cevio_available_casts, cevio_ai_available_casts
 from app.tts.aivoice_api import AIVoiceClient
 
+from app.talk_runner import run_dialogue, PlaybackScheduler, preprocess_turns  
+
 #debug
 import time, logging
 log = logging.getLogger("server_all")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
 
 # ---------- lifespan (startup/shutdown) ----------
 @asynccontextmanager
@@ -97,6 +101,12 @@ def generate_4(req: GenReq):
     turns_data = generate_turns(req.topic, turns, model=model)
     return {"turns": turns_data}
 
+# 並列会話
+class ParaTalkReq(BaseModel):
+    topic: str
+    turns: int = 12
+    allow_overlap: bool = True
+
 # ========== TTS API ==========
 mgr = TTSManager()
 # ルート確認ログ（起動時1回）
@@ -158,21 +168,60 @@ async def speak(req: SpeakReq):
 def root_health():
     return {"ok": True}
 
-# ルータ登録
-app.include_router(gen)
-app.include_router(tts)
-
-
 #司会追加
 class ProposeReq(BaseModel):
     topic: str
     history: list[dict] = []     # [{"speaker":"...","text":"..."}... 直近数件でOK]
     speakers: list[str] = []     # ["yukari","maki","ia","one"]
+    prior_feelings: dict | None = None  # ★ 前回feelings（無ければNone）
 
+# 一言セリフ生成(連続呼び出し設計)
+# prior_feelings: dict | None = None  # {"yukari": "...", "maki": "...", ...} 直近のfeelings
+# 直近のfeelingsを渡す場合の例（なくてもOK）
 @gen.post("/propose")
 def propose(req: ProposeReq):
-    # ここは app.llm_openai に “1発言だけ返す” 軽プロンプト関数を用意して呼ぶ想定
-    # 返すJSONは [{"speaker","text","emotion","priority","can_overlap"} ...]
-    # 実装は手元の generate_turns を縮約 or 専用プロンプト関数を作成
-    proposals = []  # ← 実装する
-    return {"proposals": proposals}
+    """
+    主題/直近発話/前回feelingsを使って、1セリフ分のJSONを返す。
+    """
+    try:
+        obj = propose_one_line(
+            topic=req.topic,
+            history=req.history or [],
+            speakers=req.speakers or ["yukari","maki","ia","one"],
+            prior_feelings=getattr(req, "prior_feelings", None),
+            model=os.getenv("GEN_MODEL_ONE", "gpt-4.1-mini"),
+            temperature=float(os.getenv("GEN_TEMP_ONE", "0.7")),
+        )
+        # 返却はそのまま 1件
+        return obj
+    except Exception as e:
+        return JSONResponse({"error": f"propose failed: {e}"}, status_code=503)
+
+
+@gen.post("/paratalk")
+async def paratalk(req: ParaTalkReq):
+    """
+    並列会話ランチャー:
+      1) 生成APIと同じ generate_turns を使用
+      2) talk_runner.preprocess_turns で整形（既存と統一）
+      3) run_dialogue で TTS並列→PlaybackScheduler へ投入→完了待ち
+    """
+    # 1) 会話生成（既存 generate_turns を利用）
+    model = os.getenv("GEN_MODEL", "gpt-4.1")
+    turns = max(4, min(64, req.turns))
+    turns_data = generate_turns(req.topic, turns, model=model)
+
+    # 2) 整形（talk_runner 側の既存ロジックを再利用）
+    cleaned = preprocess_turns(turns_data)  # [{"speaker","text","emotion"}...]
+
+    # 3) 並列TTS → 既存PlaybackSchedulerで再生
+    scheduler = PlaybackScheduler(overlap_ms=300)
+    await run_dialogue(cleaned, mgr, scheduler, allow_overlap=req.allow_overlap)
+
+    # 再生はサーバ側で完了済み（戻り値はJSONで通知）
+    return {"ok": True, "topic": req.topic, "turns": turns, "parallel": True}
+
+# ルータ登録 (最後に)
+app.include_router(gen)
+app.include_router(tts)
+

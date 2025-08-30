@@ -128,6 +128,13 @@ EMOTION_ALIAS = {
     "tired":"sigh", "meh":"sigh",
 }
 
+# ---- その1: 正規化マップ ----
+CANON = {
+    "結月ゆかり": "yukari", "ゆかり": "yukari", "yukari": "yukari",
+    "弦巻マキ": "maki", "マキ": "maki", "maki": "maki",
+    "IA": "ia", "ia": "ia", "イア": "ia",
+    "ONE": "one", "one": "one", "オネ": "one",
+}
 
 # ====== SYSTEM生成 ======
 def _style_block() -> str:
@@ -177,6 +184,67 @@ def build_system_prompt() -> str:
         "- 日本語としての助詞が違和感がないかを最後にチェックすること。ただし女子高生としての崩し方の範囲内であればOK。\n"
     ) + "\n" + _style_block()
 
+# ====== propose(一言生成) 用 追加関数 ======
+
+def build_propose_system_prompt() -> str:
+    """
+    司会用（1セリフだけ生成）の SYSTEM プロンプト。
+    既存の STYLE_PRESET / NAME_STYLE / EMOTION_CANON を踏襲。
+    - 出力は JSON オブジェクト1件のみ（余計な文字禁止）
+    - line_rubyは、lineの アルファベット字のみをカタカナ読みに変換して line_ruby として必ず返す
+    - emotion は EMOTION_CANON のいずれか
+    - topic は入力と同じ値または、変更を行った場合は変更後の値のどちらかを必ず出力
+    """
+    rules = [
+        "あなたは4人会話( yukari, maki, ia, one )の司会として、主題から逸脱しない1セリフだけを提案する。",
+        "出力は JSON オブジェクト1件のみ。説明/前置き/コードブロックは禁止。",
+        "speaker は ['yukari','maki','ia','one'] のいずれか。",
+        "キャラの役割：ゆかり=まとめ役/フォロー、マキ=前進係、IA=天然/話題変えたがる、ONE=逆張り/鋭い指摘。"
+        "emotion は既定の候補から1つだけ選ぶ（後述の候補）。",
+        "line は“自然な口語”で 1～2文。パターンは「feelingsの自分の感情と、直前の他者セリフを元に反応」または「関連する別の話題を提示(◯◯と言えばこないださぁ・・等)」",
+        "line_ruby は line をもとに、ひらがな・カタカナは同じ内容を設定し、アルファベット文字はカタカナに変換。 ）",
+        "【重要】出力JSONには 'topic' キーを必ず含める（必須）。"
+        "【重要】発言の内容に応じて、topicを変更し、JSONに出力する。"
+        "【重要】50%の確率で、topicを強制的に変更しJSONに出力する。(例： 「全然関係ないけど・・・」)"
+        "【重要】response_format=json_object で厳密JSONのみを返すこと。キー欠落は禁止。"
+        "各キャラの口調・語尾・相づち・役割・emotion傾向は下記定義に従う。",
+        "回答は短く、直感的に。翻訳調/説明調を避ける。脱線・冗談・遮りも少しOK。",
+        "怪我や事故、トラブルなどの話題に対しては相手を心配する。",
+        "30%の割合で、具体的な固有名詞をネットから拾って付け足す。",
+        "20%の確率で意外性（逆張り/ボケ/個人体験）を入れる",
+        "女子高生らしい軽さ。翻訳調/説明調/冗長を避け、砕けた文体を許容する。",
+        
+    ]
+    # 既存の定義を埋め込む
+    lines = []
+    lines.append("\n".join(rules))
+    lines.append("\n--- キャラクター定義（STYLE_PRESET由来） ---")
+    lines.append(_style_block())  # 既存の補助関数を再利用
+    lines.append("\n--- 呼び名・一人称（NAME_STYLE由来） ---")
+    for name in ALLOWED:
+        ns = NAME_STYLE[name]
+        others = " / ".join([f"{k}→{v}" for k, v in ns["others"].items()])
+        lines.append(f"- {name}: 一人称='{ns['self']}'｜他人称={others}")
+
+    lines.append("\n--- 使用可能な emotion 候補 ---")
+    lines.append(", ".join(EMOTION_CANON))
+
+    lines.append(
+        "\n--- 出力仕様(JSON) ---\n"
+        "{\n"
+        '  "speaker": "yukari|maki|ia|one",\n'
+        '  "line": "str",\n'
+        '  "line_ruby": "str (英字必ずカタカナに変換)",\n'
+        '  "emotion": "one of EMOTION_CANON",\n'
+        '  "feelings": {"yukari":"str","maki":"str","ia":"str","one":"str"},\n'
+        '  "topic": "str"\n'
+        "}\n"
+        "※ feelings は『主題に対する今の感じ方』を各キャラ分、短く更新する。"
+    )
+    #print ("[DEBUG] lines ", lines)
+    return "\n".join(lines)
+
+
 # ====== USER生成 ======
 def build_user(topic: str, turns: int) -> str:
     opener = random.choice(ALLOWED)
@@ -195,6 +263,47 @@ def build_user(topic: str, turns: int) -> str:
         f"role_bias={role_bias}\n"
         "必ずJSONのみ返答。JSON以外の文字は一切含めないこと。"
     )
+
+def build_propose_user_prompt(
+    topic: str,
+    history: list[dict],
+    speakers: list[str] | None = None,
+    prior_feelings: dict | None = None,
+) -> str:
+    """
+    USER プロンプト。方法1の入力仕様に対応：
+      - 会話の主題 (topic)
+      - 直前の他者セリフ (history の末尾)
+      - 4人の感じたこと（前回時点） prior_feelings
+    """
+    speakers = speakers or ALLOWED
+    last_utt = history[-1]["text"] if history else ""
+
+    payload = {
+        "topic": topic,
+        "speakers": speakers,
+        "last_utterance_raw": last_utt,
+        "prior_feelings": prior_feelings or {},
+        # コンテキストは直近6件程度までに抑えてトークン効率化
+        "history_tail": history[-6:],
+        "output_schema": {
+            "speaker": "one of ['yukari','maki','ia','one']",
+            "line": "str",
+            "line_ruby": "str (English word top katakana)",
+            "emotion": "str among EMOTION_CANON",
+            "feelings": {"yukari":"str","maki":"str","ia":"str","one":"str"},
+            "topic": "str",
+
+        },
+        # 生成の微調整ヒント
+        "hints": {
+            "stay_on_topic": True,
+            "keep_flowing": False,
+            "length": "1 sentences",
+        },
+    }
+    # LLMに渡すときは最終的に文字列化（Responses互換のため）
+    return str(payload)
 
 
 # ====== 簡易サニタイズ：モデルが万一JSON以外を返した時の保険 ======
@@ -287,3 +396,62 @@ def _postfilter(turns_data: List[Dict[str, Any]], want: int) -> List[Dict[str, A
         cleaned = cleaned[:want]
     return cleaned
 
+
+# ====== 司会用（1セリフ生成） ======
+def build_propose_messages(
+    topic: str,
+    history: list[dict],
+    speakers: list[str] | None = None,
+    prior_feelings: dict | None = None,
+) -> list[dict]:
+    """
+    Chat Completions/Responses の messages 配列を返す。
+    - system: build_propose_system_prompt()
+    - user  : build_propose_user_prompt(...)
+    """
+    return [
+        {"role": "system", "content": build_propose_system_prompt()},
+        {"role": "user", "content": build_propose_user_prompt(topic, history, speakers, prior_feelings)},
+    ]
+
+
+def propose_one_line(
+    topic: str,
+    history: list[dict],
+    speakers: list[str] | None = None,
+    prior_feelings: dict | None = None,
+    *,
+    model: str | None = None,
+    temperature: float = 0.7,
+) -> dict:
+    """
+    実行ヘルパ（任意）：LLM を叩いて 1セリフの JSON を返す。
+    既存 client(OpenAI) を使い、response_format='json_object' で安全化。
+    """
+    msgs = build_propose_messages(topic, history, speakers, prior_feelings)
+    mdl = model or os.getenv("GEN_MODEL_ONE", "gpt-4.1-mini")
+    rsp = client.chat.completions.create(
+        model=mdl,
+        messages=msgs,
+        response_format={"type": "json_object"},
+        temperature=temperature,
+    )
+    import json
+    content = (rsp.choices[0].message.content or "").strip()
+    try:
+        obj = json.loads(content)
+    except Exception:
+        # 最低限のフォールバック
+        obj = {"speaker":"yukari","line":content,"line_ruby":content,"emotion":"neutral",
+               "feelings":{"yukari":"","maki":"","ia":"","one":""},"topic":topic}
+    # スピーカ正規化（既存の normalize_spk があれば使う）
+    try:
+        obj["speaker"] = normalize_spk(obj.get("speaker"))
+    except Exception:
+        pass
+    return obj
+
+def normalize_spk(s: str) -> str:
+    if not s:
+        return "yukari"
+    return CANON.get(s.strip(), s.strip().lower())
